@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tic-Tac-Toe</title>
+<style>
+  :root {
+    --bg: #0F1A30; --panel: #18264A; --line: #2A3D6B;
+    --x: #F4C95D; --o: #7FD1C7; --text: #E9EDF5; --muted: #A9B6D3;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 24px 16px;
+  }
+  .game { width: min(420px, 100%); }
+  h1 { font-size: 2rem; letter-spacing: -0.02em; margin-bottom: 16px; }
+  .modes { display: flex; gap: 8px; margin-bottom: 12px; }
+  .modes button, .controls button, select {
+    font: inherit; font-weight: 700; color: var(--text); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 999px; padding: 10px 16px; cursor: pointer;
+    transition: background-color .2s, color .2s, border-color .2s;
+  }
+  .modes button { flex: 1; }
+  .modes button[aria-pressed="true"] { background: var(--x); color: var(--bg); border-color: var(--x); }
+  .modes button:hover:not([aria-pressed="true"]), .controls button:hover { border-color: var(--x); }
+  .options { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; color: var(--muted); }
+  .options[hidden] { display: none; }
+  select { padding: 8px 12px; border-radius: 10px; }
+  .scores { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+  .score { background: var(--panel); border-radius: 12px; padding: 10px; text-align: center; border: 2px solid transparent; }
+  .score.turn { border-color: var(--line); }
+  .score span { display: block; font-size: .85rem; color: var(--muted); }
+  .score strong { font-size: 1.5rem; }
+  .score.x strong { color: var(--x); }
+  .score.o strong { color: var(--o); }
+  .status { min-height: 1.6em; font-size: 1.15rem; font-weight: 700; margin-bottom: 12px; }
+  .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; aspect-ratio: 1; }
+  .cell {
+    background: var(--panel); border: 0; border-radius: 14px; cursor: pointer;
+    font-size: clamp(2.5rem, 14vw, 4.5rem); font-weight: 800; line-height: 1;
+    display: flex; align-items: center; justify-content: center; color: var(--text);
+    transition: background-color .15s, transform .1s;
+  }
+  .cell:hover:not(:disabled) { background: var(--line); }
+  .cell:active:not(:disabled) { transform: scale(.96); }
+  .cell:disabled { cursor: default; }
+  .cell.x { color: var(--x); }
+  .cell.o { color: var(--o); }
+  .cell.win { background: #2E4A3F; animation: pop .4s ease; }
+  .cell.preview::after { content: attr(data-preview); opacity: .25; }
+  @keyframes pop { 50% { transform: scale(1.08); } }
+  .controls { display: flex; gap: 8px; margin-top: 16px; }
+  .controls button { flex: 1; }
+  :focus-visible { outline: 3px solid var(--x); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<main class="game">
+  <h1>Tic-Tac-Toe</h1>
+
+  <div class="modes" role="group" aria-label="Game mode">
+    <button type="button" data-mode="pvp" aria-pressed="true">2 players</button>
+    <button type="button" data-mode="cpu" aria-pressed="false">vs Computer</button>
+  </div>
+
+  <div class="options" id="cpuOptions" hidden>
+    <label>Difficulty
+      <select id="difficulty">
+        <option value="easy">Easy</option>
+        <option value="medium" selected>Medium</option>
+        <option value="hard">Hard (unbeatable)</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="scores">
+    <div class="score x" id="scoreXBox"><span id="labelX">Player X</span><strong id="scoreX">0</strong></div>
+    <div class="score"><span>Draws</span><strong id="scoreDraw">0</strong></div>
+    <div class="score o" id="scoreOBox"><span id="labelO">Player O</span><strong id="scoreO">0</strong></div>
+  </div>
+
+  <p class="status" id="status" aria-live="polite"></p>
+
+  <div class="board" id="board" role="grid" aria-label="Game board"></div>
+
+  <div class="controls">
+    <button type="button" id="newRound">New round</button>
+    <button type="button" id="resetScores">Reset scores</button>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  const WIN_LINES = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8],   // rows
+    [0, 3, 6], [1, 4, 7], [2, 5, 8],   // columns
+    [0, 4, 8], [2, 4, 6]               // diagonals
+  ];
+
+  // ---------- Game state ----------
+  const state = {
+    board: Array(9).fill(null),
+    current: "X",          // whose turn
+    over: false,
+    mode: "pvp",           // "pvp" or "cpu"
+    difficulty: "medium",
+    starter: "X",          // alternates each round
+    scores: { X: 0, O: 0, draw: 0 },
+    cpuThinking: false
+  };
+  const HUMAN = "X", CPU = "O";
+
+  // ---------- Elements ----------
+  const boardEl = document.getElementById("board");
+  const statusEl = document.getElementById("status");
+  const cells = [];
+
+  for (let i = 0; i < 9; i++) {
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.className = "cell";
+    cell.dataset.index = i;
+    cell.setAttribute("aria-label", "Square " + (i + 1) + ", empty");
+    cell.addEventListener("click", () => handleCellClick(i));
+    cell.addEventListener("mouseenter", () => showPreview(i, true));
+    cell.addEventListener("mouseleave", () => showPreview(i, false));
+    boardEl.appendChild(cell);
+    cells.push(cell);
+  }
+
+  // ---------- Click handling ----------
+  function handleCellClick(i) {
+    if (state.over || state.board[i] || state.cpuThinking) return;
+    if (state.mode === "cpu" && state.current !== HUMAN) return;
+    makeMove(i, state.current);
+    if (!state.over && state.mode === "cpu") cpuTurn();
+  }
+
+  function makeMove(i, player) {
+    state.board[i] = player;
+    const result = checkWinner(state.board);
+    if (result) {
+      endRound(result);
+    } else {
+      state.current = player === "X" ? "O" : "X";
+    }
+    render();
+  }
+
+  // ---------- Win checking ----------
+  // Returns { winner: "X"|"O", line: [...] }, { winner: "draw" } or null
+  function checkWinner(board) {
+    for (const line of WIN_LINES) {
+      const [a, b, c] = line;
+      if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+        return { winner: board[a], line: line };
+      }
+    }
+    return board.every(Boolean) ? { winner: "draw" } : null;
+  }
+
+  function endRound(result) {
+    state.over = true;
+    state.result = result;
+    if (result.winner === "draw") state.scores.draw++;
+    else state.scores[result.winner]++;
+  }
+
+  // ---------- Computer player ----------
+  function cpuTurn() {
+    state.cpuThinking = true;
+    render();
+    setTimeout(() => {
+      state.cpuThinking = false;
+      makeMove(chooseCpuMove(), CPU);
+    }, 450);
+  }
+
+  function emptySquares(board) {
+    return board.map((v, i) => (v ? null : i)).filter(i => i !== null);
+  }
+
+  function chooseCpuMove() {
+    const free = emptySquares(state.board);
+    const random = () => free[Math.floor(Math.random() * free.length)];
+    if (state.difficulty === "easy") return random();
+    if (state.difficulty === "medium" && Math.random() < 0.4) return random();
+    return bestMove(state.board);
+  }
+
+  // Minimax with depth so the computer wins fast and loses slow
+  function minimax(board, player, depth) {
+    const result = checkWinner(board);
+    if (result) {
+      if (result.winner === CPU) return 10 - depth;
+      if (result.winner === HUMAN) return depth - 10;
+      return 0;
+    }
+    let best = player === CPU ? -Infinity : Infinity;
+    for (const i of emptySquares(board)) {
+      board[i] = player;
+      const score = minimax(board, player === CPU ? HUMAN : CPU, depth + 1);
+      board[i] = null;
+      best = player === CPU ? Math.max(best, score) : Math.min(best, score);
+    }
+    return best;
+  }
+
+  function bestMove(board) {
+    let bestScore = -Infinity, moves = [];
+    for (const i of emptySquares(board)) {
+      board[i] = CPU;
+      const score = minimax(board, HUMAN, 1);
+      board[i] = null;
+      if (score > bestScore) { bestScore = score; moves = [i]; }
+      else if (score === bestScore) moves.push(i);
+    }
+    return moves[Math.floor(Math.random() * moves.length)];
+  }
+
+  // ---------- Rendering ----------
+  function nameOf(player) {
+    if (state.mode === "cpu") return player === HUMAN ? "You" : "Computer";
+    return "Player " + player;
+  }
+
+  function render() {
+    const winLine = state.over && state.result.line ? state.result.line : [];
+    cells.forEach((cell, i) => {
+      const v = state.board[i];
+      cell.textContent = v || "";
+      cell.className = "cell" + (v ? " " + v.toLowerCase() : "") + (winLine.includes(i) ? " win" : "");
+      cell.disabled = state.over || Boolean(v) || state.cpuThinking;
+      cell.setAttribute("aria-label", "Square " + (i + 1) + ", " + (v || "empty"));
+    });
+
+    if (state.over) {
+      const w = state.result.winner;
+      statusEl.textContent = w === "draw" ? "It's a draw."
+        : state.mode === "cpu" ? (w === HUMAN ? "You win!" : "Computer wins.")
+        : "Player " + w + " wins!";
+    } else if (state.cpuThinking) {
+      statusEl.textContent = "Computer is thinking…";
+    } else {
+      statusEl.textContent = state.mode === "cpu" ? "Your turn (X)" : "Player " + state.current + "'s turn";
+    }
+
+    document.getElementById("scoreX").textContent = state.scores.X;
+    document.getElementById("scoreO").textContent = state.scores.O;
+    document.getElementById("scoreDraw").textContent = state.scores.draw;
+    document.getElementById("labelX").textContent = nameOf("X") + (state.mode === "cpu" ? " (X)" : "");
+    document.getElementById("labelO").textContent = nameOf("O") + (state.mode === "cpu" ? " (O)" : "");
+    document.getElementById("scoreXBox").classList.toggle("turn", !state.over && state.current === "X");
+    document.getElementById("scoreOBox").classList.toggle("turn", !state.over && state.current === "O");
+  }
+
+  function showPreview(i, on) {
+    const cell = cells[i];
+    if (!on || cell.disabled) { cell.classList.remove("preview"); return; }
+    cell.dataset.preview = state.current;
+    cell.classList.add("preview");
+  }
+
+  // ---------- Rounds, modes, controls ----------
+  function newRound() {
+    state.board = Array(9).fill(null);
+    state.over = false;
+    state.result = null;
+    state.cpuThinking = false;
+    state.current = state.starter;
+    state.starter = state.starter === "X" ? "O" : "X";   // alternate who starts
+    render();
+    if (state.mode === "cpu" && state.current === CPU) cpuTurn();
+  }
+
+  function setMode(mode) {
+    state.mode = mode;
+    document.querySelectorAll(".modes button").forEach(b =>
+      b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+    document.getElementById("cpuOptions").hidden = mode !== "cpu";
+    state.scores = { X: 0, O: 0, draw: 0 };
+    state.starter = "X";
+    newRound();
+  }
+
+  document.querySelectorAll(".modes button").forEach(b =>
+    b.addEventListener("click", () => setMode(b.dataset.mode)));
+  document.getElementById("difficulty").addEventListener("change", e => { state.difficulty = e.target.value; });
+  document.getElementById("newRound").addEventListener("click", newRound);
+  document.getElementById("resetScores").addEventListener("click", () => {
+    state.scores = { X: 0, O: 0, draw: 0 };
+    state.starter = "X";
+    newRound();
+  });
+
+  // Keyboard: number keys 1–9 play a square
+  document.addEventListener("keydown", e => {
+    if (e.key >= "1" && e.key <= "9") handleCellClick(Number(e.key) - 1);
+  });
+
+  newRound();
+})();
+</script>
+</body>
+</html>
